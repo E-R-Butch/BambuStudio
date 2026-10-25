@@ -2,7 +2,7 @@ name: macOS crash regression build
 
 on:
   push:
-    branches: [ci/macos-crash-regression]
+    branches: [ci/macos-crash-regression, ci/macos-crash-regression-ctest]
   workflow_dispatch:
 
 permissions:
