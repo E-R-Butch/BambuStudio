@@ -1758,7 +1758,7 @@ int CLI::run(int argc, char **argv)
 
     const auto *skip_thumbnails_option = m_config.option<ConfigOptionBool>("skip_thumbnails");
     const bool skip_thumbnails = skip_thumbnails_option && skip_thumbnails_option->value;
-    if (skip_thumbnails && m_config.has("export_png")) {
+    if (skip_thumbnails && std::find(m_actions.begin(), m_actions.end(), "export_png") != m_actions.end()) {
         BOOST_LOG_TRIVIAL(error) << "--skip-thumbnails cannot be combined with --export-png.";
         record_exit_reson(outfile_dir, CLI_INVALID_PARAMS, 0, cli_errors[CLI_INVALID_PARAMS], sliced_info);
         flush_and_exit(CLI_INVALID_PARAMS);
