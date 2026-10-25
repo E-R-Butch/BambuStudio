@@ -9,6 +9,10 @@ permissions:
   contents: read
   actions: read
 
+concurrency:
+  group: crash-regression-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   macos:
     runs-on: macos-26
@@ -115,25 +119,23 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release -DCMAKE_MACOSX_BUNDLE=ON \
             -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
             -DSLIC3R_BUILD_TESTS=ON
-      - name: Build complete GUI application and affected test suite
-        run: cmake --build build-ci --target BambuStudio slic3rutils_tests --parallel "$CMAKE_BUILD_PARALLEL_LEVEL"
-      - name: Run utility and HTTP lifetime regressions
-        run: ctest --test-dir build-ci --output-on-failure -R '^(slic3rutils_tests|http_lifetime_tests)$'
-      - name: Run synthetic headless CLI integration
+      - name: Build complete GUI application
         run: |
           set -euo pipefail
-          binary="$GITHUB_WORKSPACE/build-ci/src/BambuStudio.app/Contents/MacOS/BambuStudio"
-          python3 tests/cli/make_headless_fixture.py "$binary" "$RUNNER_TEMP/regression-cube.3mf"
-          python3 tests/cli/check_skip_thumbnails.py "$binary" "$RUNNER_TEMP/regression-cube.3mf" 1
+          cmake --build build-ci --target BambuStudio --parallel "$CMAKE_BUILD_PARALLEL_LEVEL" 2>&1 | tee build-ci/gui-build.log
       - name: Package isolated local GUI regression application
         run: |
           set -euo pipefail
           mkdir -p artifacts
-          cp -RL build-ci/src/BambuStudio.app artifacts/BambuStudioRegression.app
+          cp -R build-ci/src/BambuStudio.app artifacts/BambuStudioRegression.app
+          if [ -L artifacts/BambuStudioRegression.app/Contents/Resources ]; then
+            resources=$(readlink artifacts/BambuStudioRegression.app/Contents/Resources)
+            rm artifacts/BambuStudioRegression.app/Contents/Resources
+            cp -R "$resources" artifacts/BambuStudioRegression.app/Contents/Resources
+          fi
           /usr/libexec/PlistBuddy -c 'Set :CFBundleIdentifier com.bambulab.bambu-studio.regression' artifacts/BambuStudioRegression.app/Contents/Info.plist
           /usr/libexec/PlistBuddy -c 'Set :CFBundleName Bambu Studio Regression' artifacts/BambuStudioRegression.app/Contents/Info.plist
           codesign --force --deep --sign - artifacts/BambuStudioRegression.app
-          cp "$RUNNER_TEMP/regression-cube.3mf" artifacts/
           git rev-parse HEAD > artifacts/source-commit.txt
           ditto -c -k --sequesterRsrc --keepParent artifacts/BambuStudioRegression.app artifacts/BambuStudioRegression.zip
           shasum -a 256 artifacts/BambuStudioRegression.zip > artifacts/SHA256SUMS
@@ -144,13 +146,30 @@ jobs:
             artifacts/BambuStudioRegression.zip
             artifacts/SHA256SUMS
             artifacts/source-commit.txt
-            artifacts/regression-cube.3mf
+      - name: Build affected utility test suite
+        run: |
+          set -euo pipefail
+          cmake --build build-ci --target slic3rutils_tests --parallel "$CMAKE_BUILD_PARALLEL_LEVEL" 2>&1 | tee build-ci/utils-build.log
+      - name: Run utility and HTTP lifetime regressions
+        run: ctest --test-dir build-ci --output-on-failure -R '^(slic3rutils_tests|http_lifetime_tests)$'
+      - name: Run synthetic headless CLI integration
+        run: |
+          set -euo pipefail
+          binary="$GITHUB_WORKSPACE/build-ci/src/BambuStudio.app/Contents/MacOS/BambuStudio"
+          python3 tests/cli/make_headless_fixture.py "$binary" artifacts/regression-cube.3mf
+          python3 tests/cli/check_skip_thumbnails.py "$binary" artifacts/regression-cube.3mf 1
+      - uses: actions/upload-artifact@v6
+        with:
+          name: synthetic-regression-fixture
+          path: artifacts/regression-cube.3mf
       - name: Save build and test diagnostics
         if: always()
         uses: actions/upload-artifact@v6
         with:
           name: macos-build-diagnostics
           path: |
+            build-ci/gui-build.log
+            build-ci/utils-build.log
             build-ci/CMakeCache.txt
             build-ci/CMakeFiles/CMakeConfigureLog.yaml
             build-ci/Testing/Temporary/LastTest.log
