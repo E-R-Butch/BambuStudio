@@ -21,7 +21,8 @@ endif()
 
 # catch_discover_tests(${_TEST_NAME}_tests TEST_PREFIX "${_TEST_NAME}: ")
 # The lifetime cases require the loopback server supplied by the separate runner.
-add_test(${_TEST_NAME}_tests ${_TEST_NAME}_tests "${CATCH_EXTRA_ARGS} exclude:[NotWorking]~[HttpLifetime]")
+add_test(NAME ${_TEST_NAME}_tests
+    COMMAND $<TARGET_FILE:${_TEST_NAME}_tests> "${CATCH_EXTRA_ARGS} exclude:[NotWorking]~[HttpLifetime]")
 
 find_package(Python3 QUIET COMPONENTS Interpreter)
 if (Python3_Interpreter_FOUND)
