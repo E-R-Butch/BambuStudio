@@ -150,6 +150,14 @@ jobs:
         run: |
           set -euo pipefail
           cmake --build build-ci --target slic3rutils_tests --parallel "$CMAKE_BUILD_PARALLEL_LEVEL" 2>&1 | tee build-ci/utils-build.log
+      - name: Preserve compiled utility test executable
+        run: |
+          set -euo pipefail
+          ditto -c -k --sequesterRsrc --keepParent build-ci/tests/slic3rutils/slic3rutils_tests.app artifacts/slic3rutils_tests.zip
+      - uses: actions/upload-artifact@v6
+        with:
+          name: compiled-utility-tests
+          path: artifacts/slic3rutils_tests.zip
       - name: Run utility and HTTP lifetime regressions
         run: ctest --test-dir build-ci --output-on-failure -R '^(slic3rutils_tests|http_lifetime_tests)$'
       - name: Run synthetic headless CLI integration
