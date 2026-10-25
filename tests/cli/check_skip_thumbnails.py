@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import zipfile
+import xml.etree.ElementTree as ET
 
 
 def executable_lines(path):
@@ -47,6 +48,12 @@ def main():
             assert '3D/3dmodel.model' in archive.namelist()
             assert f'Metadata/plate_{plate}.gcode' in archive.namelist()
             assert not any(n.lower().endswith('.png') for n in archive.namelist())
+            relationships = ET.fromstring(archive.read('_rels/.rels'))
+            for relation in relationships:
+                if relation.get('TargetMode') != 'External':
+                    assert relation.attrib['Target'].lstrip('/') in archive.namelist(), relation.attrib
+            bounds = json.loads(archive.read(f'Metadata/plate_{plate}.json'))
+            assert bounds['bbox_all'], bounds
         log = run.stdout + run.stderr
         assert 'glfwInit Success' not in log and 'opengl version' not in log, log
 
