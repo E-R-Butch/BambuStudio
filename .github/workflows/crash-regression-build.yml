@@ -1,0 +1,126 @@
+name: macOS crash regression build
+
+on:
+  push:
+    branches: [ci/macos-crash-regression]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  macos:
+    runs-on: macos-26
+    timeout-minutes: 180
+    env:
+      CMAKE_BUILD_PARALLEL_LEVEL: 2
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          lfs: true
+      - name: Build tools and host information
+        run: |
+          set -euo pipefail
+          sw_vers
+          xcodebuild -version
+          sysctl hw.memsize hw.ncpu
+          df -h
+          python3 -m venv "$RUNNER_TEMP/build-tools"
+          "$RUNNER_TEMP/build-tools/bin/pip" install 'cmake==3.31.10' ninja
+          echo "$RUNNER_TEMP/build-tools/bin" >> "$GITHUB_PATH"
+          if [ "$(sysctl -n hw.memsize)" -lt 12000000000 ]; then
+            echo CMAKE_BUILD_PARALLEL_LEVEL=1 >> "$GITHUB_ENV"
+          fi
+      - uses: actions/cache@v5
+        id: deps-cache
+        with:
+          path: deps/build/arm64/BambuStudio_deps
+          key: crash-regression-macos26-arm64-${{ hashFiles('deps/**') }}
+      - name: Restore verified upstream dependency artifact
+        id: upstream-deps
+        if: steps.deps-cache.outputs.cache-hit != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/upstream-deps.zip"
+          if curl --fail --location --retry 2 \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H 'Accept: application/vnd.github+json' \
+            'https://api.github.com/repos/bambulab/BambuStudio/actions/artifacts/10694944344/zip' \
+            -o "$archive"; then
+            echo 'e252e37fd4bee509363455e899a79cec4fa9f1a09bd38189cf9562032607438f  '"$archive" | shasum -a 256 -c -
+            mkdir -p "$RUNNER_TEMP/upstream-deps"
+            unzip -q "$archive" -d "$RUNNER_TEMP/upstream-deps"
+            tar -xzf "$RUNNER_TEMP"/upstream-deps/*.tar.gz -C deps
+            echo restored=true >> "$GITHUB_OUTPUT"
+          else
+            echo 'Upstream artifact unavailable; building dependencies from source.'
+            echo restored=false >> "$GITHUB_OUTPUT"
+          fi
+      - name: Complete dependency prefix
+        if: steps.deps-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          prefix="$GITHUB_WORKSPACE/deps/build/arm64/BambuStudio_deps"
+          cmake -S deps -B deps/ci-build -G Ninja \
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+            -DDESTDIR="$prefix" -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
+            -DOPENSSL_ARCH=darwin64-arm64-cc
+          if [ '${{ steps.upstream-deps.outputs.restored }}' = true ]; then
+            cmake --build deps/ci-build --target dep_libnoise dep_OpenMeshCraft --parallel 1
+          else
+            brew install automake texinfo nasm yasm x264
+            cmake --build deps/ci-build --target deps --parallel 1
+          fi
+      - name: Configure complete GUI application and tests
+        run: |
+          set -euo pipefail
+          cmake -S . -B build-ci -G Ninja \
+            -DBBL_RELEASE_TO_PUBLIC=1 -DBBL_INTERNAL_TESTING=0 \
+            -DCMAKE_PREFIX_PATH="$GITHUB_WORKSPACE/deps/build/arm64/BambuStudio_deps/usr/local" \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_MACOSX_BUNDLE=ON \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
+            -DSLIC3R_BUILD_TESTS=ON
+      - name: Build complete GUI application and affected test suite
+        run: cmake --build build-ci --target BambuStudio slic3rutils_tests --parallel "$CMAKE_BUILD_PARALLEL_LEVEL"
+      - name: Run utility and HTTP lifetime regressions
+        run: ctest --test-dir build-ci --output-on-failure -R '^(slic3rutils_tests|http_lifetime_tests)$'
+      - name: Run synthetic headless CLI integration
+        run: |
+          set -euo pipefail
+          binary="$GITHUB_WORKSPACE/build-ci/src/BambuStudio.app/Contents/MacOS/BambuStudio"
+          python3 tests/cli/make_headless_fixture.py "$binary" "$RUNNER_TEMP/regression-cube.3mf"
+          python3 tests/cli/check_skip_thumbnails.py "$binary" "$RUNNER_TEMP/regression-cube.3mf" 1
+      - name: Package isolated local GUI regression application
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          cp -RL build-ci/src/BambuStudio.app artifacts/BambuStudioRegression.app
+          /usr/libexec/PlistBuddy -c 'Set :CFBundleIdentifier com.bambulab.bambu-studio.regression' artifacts/BambuStudioRegression.app/Contents/Info.plist
+          /usr/libexec/PlistBuddy -c 'Set :CFBundleName Bambu Studio Regression' artifacts/BambuStudioRegression.app/Contents/Info.plist
+          codesign --force --deep --sign - artifacts/BambuStudioRegression.app
+          cp "$RUNNER_TEMP/regression-cube.3mf" artifacts/
+          git rev-parse HEAD > artifacts/source-commit.txt
+          ditto -c -k --sequesterRsrc --keepParent artifacts/BambuStudioRegression.app artifacts/BambuStudioRegression.zip
+          shasum -a 256 artifacts/BambuStudioRegression.zip > artifacts/SHA256SUMS
+      - uses: actions/upload-artifact@v6
+        with:
+          name: BambuStudio-macos-arm64-crash-regression
+          path: |
+            artifacts/BambuStudioRegression.zip
+            artifacts/SHA256SUMS
+            artifacts/source-commit.txt
+            artifacts/regression-cube.3mf
+      - name: Save build and test diagnostics
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: macos-build-diagnostics
+          path: |
+            build-ci/CMakeCache.txt
+            build-ci/CMakeFiles/CMakeConfigureLog.yaml
+            build-ci/Testing/Temporary/LastTest.log
+            deps/ci-build/CMakeCache.txt
