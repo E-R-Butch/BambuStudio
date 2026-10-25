@@ -26,7 +26,7 @@ jobs:
           xcodebuild -version
           sysctl hw.memsize hw.ncpu
           df -h
-          echo 'DEPS_CACHE_KEY=crash-regression-macos26-arm64-${{ hashFiles('"'"'deps/**'"'"') }}' >> "$GITHUB_ENV"
+          echo "DEPS_CACHE_KEY=crash-regression-macos26-arm64-${{ hashFiles('deps/**') }}" >> "$GITHUB_ENV"
           python3 -m venv "$RUNNER_TEMP/build-tools"
           "$RUNNER_TEMP/build-tools/bin/pip" install 'cmake==3.31.10' ninja
           echo "$RUNNER_TEMP/build-tools/bin" >> "$GITHUB_PATH"
