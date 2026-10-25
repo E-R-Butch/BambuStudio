@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Integration check: built BambuStudio binary + a known-valid project fixture.
+"""Integration check: built BambuStudio binary + a known-valid, deterministic project fixture.
 
 Usage: python3 check_skip_thumbnails.py /path/to/BambuStudio fixture.3mf [plate]
 Run in a headless/sandboxed environment. The fixture is copied, never rewritten.
+Use make_headless_fixture.py: complex projects may reorder islands even between
+two flag-free baselines, making exact G-code equality an unsuitable oracle.
 """
 import hashlib
 import json
