@@ -26,17 +26,18 @@ jobs:
           xcodebuild -version
           sysctl hw.memsize hw.ncpu
           df -h
+          echo 'DEPS_CACHE_KEY=crash-regression-macos26-arm64-${{ hashFiles('"'"'deps/**'"'"') }}' >> "$GITHUB_ENV"
           python3 -m venv "$RUNNER_TEMP/build-tools"
           "$RUNNER_TEMP/build-tools/bin/pip" install 'cmake==3.31.10' ninja
           echo "$RUNNER_TEMP/build-tools/bin" >> "$GITHUB_PATH"
           if [ "$(sysctl -n hw.memsize)" -lt 12000000000 ]; then
             echo CMAKE_BUILD_PARALLEL_LEVEL=1 >> "$GITHUB_ENV"
           fi
-      - uses: actions/cache@v5
+      - uses: actions/cache/restore@v5
         id: deps-cache
         with:
           path: deps/build/arm64/BambuStudio_deps
-          key: crash-regression-macos26-arm64-${{ hashFiles('deps/**') }}
+          key: ${{ env.DEPS_CACHE_KEY }}
       - name: Restore verified upstream dependency artifact
         id: upstream-deps
         if: steps.deps-cache.outputs.cache-hit != 'true'
@@ -75,6 +76,36 @@ jobs:
             brew install automake texinfo nasm yasm x264
             cmake --build deps/ci-build --target deps --parallel 1
           fi
+      - name: Relocate dependency SDK references
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import os, re, subprocess
+          prefix = Path(os.environ['GITHUB_WORKSPACE']) / 'deps/build/arm64/BambuStudio_deps'
+          sdk = subprocess.check_output(['xcrun', '--show-sdk-path'], text=True).strip()
+          pattern = re.compile(r'(?:/Library/Developer/CommandLineTools/SDKs|/Applications/Xcode[^/]*\.app/Contents/Developer/Platforms/MacOSX\.platform/Developer/SDKs)/MacOSX[^/;\s"\x27]*\.sdk')
+          changed = []
+          for path in prefix.rglob('*'):
+              if not path.is_file() or path.stat().st_size > 2_000_000:
+                  continue
+              if path.suffix not in ('.cmake', '.pc', '.la', '.sh') and 'wx' not in path.parts:
+                  continue
+              try:
+                  original = path.read_text()
+              except UnicodeDecodeError:
+                  continue
+              updated = pattern.sub(sdk, original)
+              if updated != original:
+                  path.write_text(updated)
+                  changed.append(str(path.relative_to(prefix)))
+          print('Current SDK:', sdk)
+          print('Relocated dependency metadata:', changed)
+          PY
+      - uses: actions/cache/save@v5
+        if: steps.deps-cache.outputs.cache-hit != 'true'
+        with:
+          path: deps/build/arm64/BambuStudio_deps
+          key: ${{ env.DEPS_CACHE_KEY }}
       - name: Configure complete GUI application and tests
         run: |
           set -euo pipefail
